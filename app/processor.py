@@ -17,18 +17,41 @@ def detect_sentiment(text: str) -> str:
     return "neutral"
 
 
-def find_weapons(text: str, weapons_list: list[str]) -> list[str]:
+def find_weapons_batch(client: Elasticsearch, weapons_list: list[str]) -> dict:
     """
-    we look for weapons from list inside text
+    Use a single ElasticSearch query with highlight to detect all weapons.
+    Returns a mapping: {doc_id: [weapons]}.
+    """
+    query = {
+        "query": {
+            "multi_match": {
+                "query": " ".join(weapons_list),
+                "fields": ["text"],
+                "operator": "or"
+            }
+        },
+        "highlight": {
+            "fields": {
+                "text": {
+                    "number_of_fragments": 0
+                }
+            }
+        },
+        "size": 1000
+    }
 
-    case insensitive, returns list of found weapons
-    """
-    found = []
-    lower_text = text.lower()
-    for weapon in weapons_list:
-        if weapon.lower() in lower_text:
-            found.append(weapon)
-    return found
+    resp = client.search(index=ELASTIC_INDEX, body=query)
+
+    results = {}
+    for hit in resp["hits"]["hits"]:
+        doc_id = hit["_id"]
+        highlights = " ".join(hit.get("highlight", {}).get("text", []))
+        found = []
+        for weapon in weapons_list:
+            if weapon.lower() in highlights.lower():
+                found.append(weapon)
+        results[doc_id] = list(set(found))
+    return results
 
 
 def process_documents(csv_weapon_file: str):
@@ -45,7 +68,11 @@ def process_documents(csv_weapon_file: str):
         weapons_list = [line.strip() for line in f if line.strip()]
 
 
-    # scroll all docs
+    # Run one batch query to detect weapons in all docs
+    weapons_map = find_weapons_batch(client, weapons_list)
+
+
+    # fetch all docs
     query = {"query": {"match_all": {}}}
     resp = client.search(index=ELASTIC_INDEX, body=query, size=1000)
 
@@ -57,7 +84,7 @@ def process_documents(csv_weapon_file: str):
         # Sentiment
         sentiment = detect_sentiment(doc["text"])
         # Weapons
-        weapons = find_weapons(doc["text"], weapons_list)
+        weapons = weapons_map.get(doc_id, [])
 
         # update doc
         client.update(

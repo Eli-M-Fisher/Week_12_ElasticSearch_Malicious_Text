@@ -1,0 +1,6 @@
+FROM docker.elastic.co/elasticsearch/elasticsearch:8.13.2
+
+# Simple dev mode (single-node)
+ENV discovery.type=single-node
+
+EXPOSE 9200
