@@ -1,9 +1,10 @@
 from fastapi import FastAPI
 from app.data_loader import load_csv_to_elastic
 from app.processor import process_documents
+from app import routes
 
 app = FastAPI()
-processing_done = False
+processing_done = False  # the shared state to track if processing is done
 
 # i load data on startup
 @app.on_event("startup")
@@ -19,7 +20,7 @@ def run_processing():
     processing_done = True
     return {"message": "Processing done."}
 
-
+app.include_router(routes.router)
 
 # root endpoint
 @app.get("/")
