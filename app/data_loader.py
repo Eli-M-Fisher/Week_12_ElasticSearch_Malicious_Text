@@ -13,6 +13,12 @@ def load_csv_to_elastic(csv_path: str):
     df["TweetID"] = df["TweetID"].astype(str)
     df = df.drop_duplicates(subset=["TweetID"], keep="first")
 
+    # normalize dates to ISO format (with timezone colon)
+    df["CreateDate"] = pd.to_datetime(df["CreateDate"], utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+    # ensure no NaN in text
+    df["text"] = df["text"].fillna("")
+
 
     # Iterate and index
     for _, row in df.iterrows():
