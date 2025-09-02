@@ -16,75 +16,69 @@ def detect_sentiment(text: str) -> str:
         return "negative"
     return "neutral"
 
-
-def find_weapons_batch(client: Elasticsearch, weapons_list: list[str]) -> dict:
+def find_weapons_in_text(text: str, weapons_list: list[str]) -> list[str]:
     """
-    Use a single ElasticSearch query with highlight to detect all weapons.
-    Returns a mapping: {doc_id: [weapons]}.
+    here i find weapons in text (case-insensitive)
     """
-    query = {
-        "query": {
-            "multi_match": {
-                "query": " ".join(weapons_list),
-                "fields": ["text"],
-                "operator": "or"
-            }
-        },
-        "highlight": {
-            "fields": {
-                "text": {
-                    "number_of_fragments": 0
-                }
-            }
-        },
-        "size": 1000
-    }
+    found = []
+    lower_text = text.lower()
+    for weapon in weapons_list:
+        if weapon.lower() in lower_text:
+            found.append(weapon)
+    return list(set(found))
 
-    resp = client.search(index=ELASTIC_INDEX, body=query)
+def fetch_all_docs(client: Elasticsearch, index: str, batch_size: int = 1000):
+    """
+    and fetch all docs from Elasticsearch using PIT + Search After
 
-    results = {}
-    for hit in resp["hits"]["hits"]:
-        doc_id = hit["_id"]
-        highlights = " ".join(hit.get("highlight", {}).get("text", []))
-        found = []
-        for weapon in weapons_list:
-            if weapon.lower() in highlights.lower():
-                found.append(weapon)
-        results[doc_id] = list(set(found))
-    return results
+    yields hits until exhausted.
+    """
+    pit = client.open_point_in_time(index=index, keep_alive="1m")["id"]
+    search_after = None
 
+    while True:
+        body = {
+            "size": batch_size,
+            "sort": [{"_shard_doc": "asc"}],  # its required for search_after
+            "pit": {"id": pit, "keep_alive": "1m"}
+        }
+        if search_after:
+            body["search_after"] = search_after
+
+        resp = client.search(body=body)
+        hits = resp["hits"]["hits"]
+
+        if not hits:
+            break
+
+        for hit in hits:
+            yield hit
+
+        search_after = hits[-1]["sort"]
+
+    client.close_point_in_time(body={"id": pit})
 
 def process_documents(csv_weapon_file: str):
     """
-    - fetch all docs from ES
-    - Add sentiment and weapns fields
-    - remove irrelevent docs
+    - fetching all docswith PIT+Search after
+    - add sentiment andweapons fields
+    - Remove irrelevant doc
     """
     client: Elasticsearch = get_client()
-
 
     # load weapons list
     with open(csv_weapon_file, "r") as f:
         weapons_list = [line.strip() for line in f if line.strip()]
 
+    processed = 0
+    deleted = 0
 
-    # Run one batch query to detect weapons in all docs
-    weapons_map = find_weapons_batch(client, weapons_list)
-
-
-    # fetch all docs
-    query = {"query": {"match_all": {}}}
-    resp = client.search(index=ELASTIC_INDEX, body=query, size=1000)
-
-    for hit in resp["hits"]["hits"]:
+    for hit in fetch_all_docs(client, ELASTIC_INDEX, batch_size=1000):
         doc_id = hit["_id"]
         doc = hit["_source"]
 
-        
-        # Sentiment
-        sentiment = detect_sentiment(doc["text"])
-        # Weapons
-        weapons = weapons_map.get(doc_id, [])
+        sentiment = detect_sentiment(doc.get("text", ""))
+        weapons = find_weapons_in_text(doc.get("text", ""), weapons_list)
 
         # update doc
         client.update(
@@ -93,13 +87,15 @@ def process_documents(csv_weapon_file: str):
             body={"doc": {"sentiment": sentiment, "weapons": weapons}},
         )
 
-        # delete irrelevant
+        # and delete irrelevant
         if (
             doc.get("Antisemitic", 0) == 0
             and len(weapons) == 0
             and sentiment in ["positive", "neutral"]
         ):
             client.delete(index=ELASTIC_INDEX, id=doc_id)
+            deleted += 1
 
-    print("Processing completed.")
+        processed += 1
 
+    print(f"Processing completed. Updated {processed} docs, deleted {deleted}.")
