@@ -6,7 +6,7 @@ This is a **monolithic** system of FastAPI and Elasticsearch, whose function is 
 
 - Load a text file of tweets
 - Index them into Elastic with appropriate fields
-- Process the data: I identify sentiment and then identify weapons from texts (using ElasticSearch).
+- Process the data: I identify sentiment and then identify weapons from texts (using ElasticSearchand TextBlob).
 - Delete irrelevant texts.
 - Then we open an external API with 2 endpoints that allow queries on the data we processed
 
@@ -17,7 +17,7 @@ This is a **monolithic** system of FastAPI and Elasticsearch, whose function is 
 ## 1. Loading the data
 
 - There is a CSV file: `tweets_injected.csv` with the fields:
-- `TweetID` (which is the unique identifier)
+- `TweetID` (which is the original unique identifier)
 
 - `CreateDate` (the date the tweet was created)
 
@@ -26,6 +26,12 @@ This is a **monolithic** system of FastAPI and Elasticsearch, whose function is 
 - `text` (the literal content itself)
 - Then using `data_loader.py` we load the file and upload the data to the Elastic index: `tweets_index`.
 - The mapping (`INDEX_MAPPING`) ensures that each field is defined correctly (date, keyword, text, etc.).
+
+- for reliability each row will receives a unique **`InternalID`** which is used as the Elasticsearch `_id` and the original tweetID is stred in `OriginalTweetID` for reference
+- also CreateDate values are normalized into ISO8601 format with timezone
+- and text is cleand to avoid NaN values.
+
+
 
 ---
 
